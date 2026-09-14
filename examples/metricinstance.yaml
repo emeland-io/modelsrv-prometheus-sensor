@@ -1,0 +1,15 @@
+# Example MetricInstance: the concrete measured thing. It carries the PromQL
+# query (with its concrete labels), because the query differs per subject. The
+# prometheus-sensor runs this query and emits a MetricValue with the current
+# reading. metricRef is optional: it groups the instance under an abstract
+# Metric (see metric.yaml); scraped instances may omit it entirely.
+version: emeland.io/v1
+kind: MetricInstance
+spec:
+  metricInstanceId: 22222222-2222-2222-2222-222222222222
+  displayName: Up targets (prod cluster)
+  metricRef:
+    metricId: 11111111-1111-1111-1111-111111111111
+  annotations:
+    emeland.io/metric.expression: "sum(up{cluster=\"prod\"})"
+    emeland.io/metric.language: promql

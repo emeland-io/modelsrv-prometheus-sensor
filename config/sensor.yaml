@@ -8,6 +8,12 @@ prometheusUrl: "http://localhost:9090"
 # How often to re-evaluate every known Metric. Defaults to 30s when unset.
 pollInterval: 30s
 
+# Derive MetricInstances and Thresholds from the Prometheus alerting rules
+# (/api/v1/rules) on each poll. Off by default. When enabled, each alerting rule
+# becomes a MetricInstance (carrying the rule's PromQL expression) plus a
+# Threshold referencing it; rules that disappear are deleted on the next scrape.
+scrapeRules: false
+
 # Downstream model servers that receive the MetricValue events this sensor
 # emits. Often the same node as `upstream`.
 subscribers:

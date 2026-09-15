@@ -15,6 +15,7 @@ import (
 	"emeland.io/modelsrv-prometheus-sensor/internal/config"
 	"emeland.io/modelsrv-prometheus-sensor/internal/eval"
 	"emeland.io/modelsrv-prometheus-sensor/internal/prometheus"
+	"emeland.io/modelsrv-prometheus-sensor/internal/scrape"
 	"emeland.io/modelsrv-prometheus-sensor/internal/sensor"
 )
 
@@ -69,31 +70,46 @@ func run(ctx context.Context, cfg config.Config, listenAddr string, log *zap.Sug
 
 	evaluator := eval.New(srv.Model(), promClient, srv, log)
 
+	var scraper *scrape.Scraper
+	if cfg.ScrapeRules {
+		scraper = scrape.New(promClient, srv, log)
+	}
+
 	log.Infow("prometheus sensor running",
 		"listen", listenAddr,
 		"upstream", cfg.Upstream,
 		"prometheusUrl", cfg.PrometheusURL,
 		"pollInterval", cfg.PollInterval.String(),
 		"subscribers", len(cfg.Subscribers),
+		"scrapeRules", cfg.ScrapeRules,
 	)
 
 	ticker := time.NewTicker(cfg.PollInterval)
 	defer ticker.Stop()
 
-	// Evaluate once at startup, then on every tick.
-	evaluate(ctx, evaluator, log)
+	// Run once at startup, then on every tick. Scrape rules first (when
+	// enabled) so freshly derived MetricInstances are available to evaluate.
+	poll(ctx, scraper, evaluator, log)
 	for {
 		select {
 		case <-ctx.Done():
 			log.Infow("shutting down")
 			return nil
 		case <-ticker.C:
-			evaluate(ctx, evaluator, log)
+			poll(ctx, scraper, evaluator, log)
 		}
 	}
 }
 
-func evaluate(ctx context.Context, evaluator *eval.Evaluator, log *zap.SugaredLogger) {
+// poll runs one cycle: optionally scrape Prometheus alerting rules into
+// MetricInstances/Thresholds, then evaluate MetricInstances into MetricValues
+// and Thresholds into Findings.
+func poll(ctx context.Context, scraper *scrape.Scraper, evaluator *eval.Evaluator, log *zap.SugaredLogger) {
+	if scraper != nil {
+		if err := scraper.ScrapeOnce(ctx); err != nil {
+			log.Errorw("rule scrape cycle failed", "error", err)
+		}
+	}
 	if err := evaluator.EvaluateOnce(ctx); err != nil {
 		log.Errorw("evaluation cycle failed", "error", err)
 	}

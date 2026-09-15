@@ -52,9 +52,11 @@ sensor's local model. On every poll the sensor:
    value, and emits or clears a Finding;
 4. forwards every emitted event to the configured downstream `subscribers`.
 
-The sensor is purely a **producer of derived resources** (MetricValues and
-Findings). It never authors MetricInstances or Thresholds — those come from
-emeland.
+The sensor is primarily a **producer of derived resources** (MetricValues and
+Findings) and does not normally author MetricInstances or Thresholds — those
+come from emeland. The one exception is the optional rule scraper (below): when
+enabled, the sensor also derives MetricInstances and Thresholds from the
+Prometheus alerting rules.
 
 ## What happens on every poll
 
@@ -122,6 +124,37 @@ The Finding:
 To give that finding kind a human-readable name in the model, register a
 `FindingType` under the same UUID — see [`examples/findingtype.yaml`](examples/findingtype.yaml).
 
+## Scraping Prometheus alerting rules (optional)
+
+When `scrapeRules` is enabled, on each poll the sensor also fetches the
+Prometheus **alerting rules** (`/api/v1/rules`) — the rule definitions, not
+their firing state — and decomposes each rule into two resources it authors:
+
+- a **MetricInstance** carrying the rule's **measurement** — the left-hand side
+  of the rule's comparison — in `emeland.io/metric.expression`, and
+- a **Threshold** referencing that MetricInstance, carrying the **comparison** as
+  the structured `emeland.io/threshold.operator` + `emeland.io/threshold.limit`.
+  The Threshold never carries an expression; the expression lives on the
+  MetricInstance it references.
+
+For example `histogram_quantile(0.99, x) > 0.5` becomes a MetricInstance with
+expression `histogram_quantile(0.99, x)` and a Threshold with operator `gt`,
+limit `0.5`. A rule that does not reduce to `<expr> <op> <number>` (no top-level
+comparison, a non-numeric right-hand side, or a compound condition) falls back
+to a **boolean measurement**: the whole query goes on the MetricInstance (it
+evaluates to 0 or 1) and the Threshold becomes `gt 0`.
+
+Ids are **deterministic**, derived from the rule's identity (group + name) —
+*not* from the query, labels or threshold — so editing any of those updates the
+same resources in place rather than creating duplicates. Unchanged rules are not
+re-emitted. A reconcile pass each scrape emits deletes for rules that have
+disappeared. State is in-memory, so a rule deleted while the sensor is down is
+not detected (it is re-asserted, not removed, on restart).
+
+This reuses the configured `prometheusUrl` (no separate AlertManager endpoint —
+alerting rules live in Prometheus, not AlertManager). Firing state is ignored;
+only the definitions are consumed.
+
 ## Authoring definitions
 
 Author these in your emeland source of truth (for example a git repo watched by
@@ -186,6 +219,7 @@ Values live in [`config/sensor.yaml`](config/sensor.yaml):
 - `upstream` — base API URL of the emeland node holding the definitions.
 - `prometheusUrl` — base URL of the Prometheus server to query.
 - `pollInterval` — evaluation interval (default `30s`).
+- `scrapeRules` — derive MetricInstances/Thresholds from Prometheus alerting rules each poll (default `false`).
 - `subscribers` — downstream model servers that receive the emitted events.
 
 ## Run

@@ -24,6 +24,7 @@ var _ = Describe("config.Load", func() {
 upstream: "http://modelsrv:24000/api/"
 prometheusUrl: "http://prometheus:9090"
 pollInterval: 15s
+scrapeRules: true
 subscribers:
   - "http://downstream:24000/api/"
 `)
@@ -32,7 +33,18 @@ subscribers:
 		Expect(cfg.Upstream).To(Equal("http://modelsrv:24000/api/"))
 		Expect(cfg.PrometheusURL).To(Equal("http://prometheus:9090"))
 		Expect(cfg.PollInterval).To(Equal(15 * time.Second))
+		Expect(cfg.ScrapeRules).To(BeTrue())
 		Expect(cfg.Subscribers).To(Equal([]string{"http://downstream:24000/api/"}))
+	})
+
+	It("defaults scrapeRules to false when unset", func() {
+		path := writeConfig(`
+upstream: "http://up:24000/api/"
+prometheusUrl: "http://prom:9090"
+`)
+		cfg, err := config.Load(path)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cfg.ScrapeRules).To(BeFalse())
 	})
 
 	It("applies the default poll interval when unset", func() {

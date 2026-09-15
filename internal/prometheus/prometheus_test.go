@@ -18,18 +18,25 @@ func TestPrometheus(t *testing.T) {
 	RunSpecs(t, "prometheus")
 }
 
-// fakeAPI is a queryAPI stub returning a preset value/error.
+// fakeAPI is a promAPI stub returning preset query/rules values or errors.
 type fakeAPI struct {
 	val      model.Value
 	warnings promv1.Warnings
 	err      error
 
 	gotQuery string
+
+	rules    promv1.RulesResult
+	rulesErr error
 }
 
 func (f *fakeAPI) Query(_ context.Context, query string, _ time.Time, _ ...promv1.Option) (model.Value, promv1.Warnings, error) {
 	f.gotQuery = query
 	return f.val, f.warnings, f.err
+}
+
+func (f *fakeAPI) Rules(_ context.Context, _ []string) (promv1.RulesResult, error) {
+	return f.rules, f.rulesErr
 }
 
 var _ = Describe("Client.QueryScalar", func() {
@@ -86,5 +93,51 @@ var _ = Describe("Client.QueryScalar", func() {
 		c := &Client{api: f}
 		_, err := c.QueryScalar(ctx, "bad")
 		Expect(err).To(MatchError(ContainSubstring("boom")))
+	})
+})
+
+var _ = Describe("Client.FetchAlertingRules", func() {
+	ctx := context.Background()
+
+	It("returns alerting rules and ignores recording rules", func() {
+		f := &fakeAPI{rules: promv1.RulesResult{Groups: []promv1.RuleGroup{
+			{
+				Name: "slo",
+				Rules: promv1.Rules{
+					promv1.AlertingRule{
+						Name:        "HighLatency",
+						Query:       "histogram_quantile(0.99, x) > 0.5",
+						Duration:    300,
+						Labels:      model.LabelSet{"severity": "page"},
+						Annotations: model.LabelSet{"summary": "latency too high"},
+					},
+					promv1.RecordingRule{Name: "job:latency:p99", Query: "histogram_quantile(0.99, x)"},
+				},
+			},
+		}}}
+		c := &Client{api: f}
+
+		rules, err := c.FetchAlertingRules(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(rules).To(HaveLen(1))
+		Expect(rules[0].Group).To(Equal("slo"))
+		Expect(rules[0].Name).To(Equal("HighLatency"))
+		Expect(rules[0].Query).To(Equal("histogram_quantile(0.99, x) > 0.5"))
+		Expect(rules[0].Duration).To(Equal(float64(300)))
+		Expect(rules[0].Labels).To(HaveKeyWithValue("severity", "page"))
+		Expect(rules[0].Annotations).To(HaveKeyWithValue("summary", "latency too high"))
+	})
+
+	It("returns an empty slice when there are no rules", func() {
+		c := &Client{api: &fakeAPI{rules: promv1.RulesResult{}}}
+		rules, err := c.FetchAlertingRules(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(rules).To(BeEmpty())
+	})
+
+	It("propagates fetch errors", func() {
+		c := &Client{api: &fakeAPI{rulesErr: errors.New("rules boom")}}
+		_, err := c.FetchAlertingRules(ctx)
+		Expect(err).To(MatchError(ContainSubstring("rules boom")))
 	})
 })

@@ -30,6 +30,10 @@ type Config struct {
 
 	// PollInterval is how often the sensor re-evaluates all known Metrics.
 	PollInterval time.Duration `yaml:"pollInterval"`
+
+	// ScrapeRules enables deriving MetricInstances and Thresholds from the
+	// Prometheus alerting rules (/api/v1/rules) on each poll. Off by default.
+	ScrapeRules bool `yaml:"scrapeRules"`
 }
 
 // Load reads, normalizes and validates the YAML config at path.

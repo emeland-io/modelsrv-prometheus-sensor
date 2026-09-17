@@ -8,7 +8,7 @@ require (
 	github.com/onsi/gomega v1.36.1
 	github.com/prometheus/client_golang v1.24.1
 	github.com/prometheus/common v0.71.0
-	go.emeland.io/modelsrv v0.11.1-0.20260914230403-53d20dd75190
+	go.emeland.io/modelsrv v0.12.0
 	go.uber.org/zap v1.28.0
 	gopkg.in/yaml.v3 v3.0.1
 )

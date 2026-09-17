@@ -1,0 +1,29 @@
+# https://golangci-lint.run/docs/configuration/file
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  default: none
+  enable:
+    - govet
+    - staticcheck
+    - errcheck
+    - ineffassign
+    - unused
+    # Style checks formerly covered by golint (now deprecated).
+    - revive
+  settings:
+    revive:
+      rules:
+        - name: exported
+          disabled: true
+  # v2: path/linter exclusions live under linters.exclusions (not issues.exclude-rules).
+  exclusions:
+    rules:
+      # Tests often use dot-imports for Gomega/Ginkgo.
+      - path: _test\.go
+        linters:
+          - revive

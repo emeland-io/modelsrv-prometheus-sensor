@@ -1,0 +1,17 @@
+# Optional: register a FindingType so the sensor's ThresholdBreached findings
+# show a human-readable name and description in the model. Author this in your
+# emeland source of truth (like Metrics and Thresholds).
+#
+# The findingTypeId is the deterministic UUIDv5 the sensor derives for the
+# "ThresholdBreached" finding kind (namespace c3d4e5f6-a7b8-9012-cdef-012345678901,
+# name "ThresholdBreached"). It must match, otherwise the findings will not
+# resolve to this type.
+version: emeland.io/v1
+kind: FindingType
+spec:
+  findingTypeId: 8c34ad70-b8e1-55bf-9423-48d904f5fd7a
+  displayName: ThresholdBreached
+  description: >
+    A Threshold's condition is met by its Metric's current value: the metric
+    value satisfies the threshold's operator/limit comparison. Raised by
+    modelsrv-prometheus-sensor and cleared when the value recovers.

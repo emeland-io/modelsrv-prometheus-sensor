@@ -1,0 +1,17 @@
+# Example Threshold definition. Author these in your emeland source of truth
+# alongside the MetricInstance they reference (see metricinstance.yaml). A
+# Threshold does not carry its own PromQL: it references a MetricInstance (whose
+# expression produces the value) and applies a structured comparison to that
+# value. When the comparison holds, the prometheus-sensor emits a
+# ThresholdBreached Finding; when it no longer holds, the Finding is cleared.
+version: emeland.io/v1
+kind: Threshold
+spec:
+  thresholdId: 33333333-3333-3333-3333-333333333333
+  displayName: Too few targets up
+  description: Fewer than 3 scrape targets are up
+  metricInstanceRef:
+    metricInstanceId: 22222222-2222-2222-2222-222222222222
+  annotations:
+    emeland.io/threshold.operator: lt
+    emeland.io/threshold.limit: "3"

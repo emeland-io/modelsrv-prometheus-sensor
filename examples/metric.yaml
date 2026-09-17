@@ -1,0 +1,13 @@
+# Example Metric: an abstract, organizational grouping. A Metric carries no
+# PromQL query and is optional. The prometheus-sensor does not read Metrics; it
+# evaluates MetricInstances (see metricinstance.yaml), which may reference a
+# Metric to group them under an abstract concept.
+version: emeland.io/v1
+kind: Metric
+spec:
+  metricId: 11111111-1111-1111-1111-111111111111
+  displayName: Up targets
+  description: Number of scrape targets currently up
+  annotations:
+    emeland.io/unit: targets
+    emeland.io/dimension: availability

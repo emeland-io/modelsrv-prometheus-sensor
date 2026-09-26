@@ -1,0 +1,18 @@
+# Example Metric fanning out demoapp_http_requests_total. That series carries
+# path/code/method labels across several pods; grouping by namespace,job and
+# summing collapses those into one request count per job. Against the demo
+# Prometheus this yields two MetricInstances:
+#   emeland-demo / metrics-demo-app
+#   demo-apps    / metrics-demo-app
+version: emeland.io/v1
+kind: Metric
+spec:
+  metricId: 44444444-4444-4444-4444-444444444444
+  displayName: HTTP requests
+  description: Total HTTP requests seen by the demo app, per namespace/job
+  annotations:
+    emeland.io/metric.source: demoapp_http_requests_total
+    emeland.io/metric.aggregation: sum
+    emeland.io/metric.group-by: namespace,job
+    emeland.io/unit: requests
+    emeland.io/dimension: traffic

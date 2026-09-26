@@ -1,0 +1,28 @@
+# Example Metric: a manually-authored, abstract measurement that the
+# prometheus-sensor fans out. It names an underlying Prometheus time series
+# (source), an aggregation function, and the labels to group by. The sensor
+# queries `<aggregation> by (<group-by>) (<source>)` and creates one
+# MetricInstance (plus its current MetricValue) per resulting group.
+#
+# Against the demo Prometheus, this Metric yields two MetricInstances:
+#   emeland-demo / emeland-demo-filter
+#   emeland-demo / emeland-demo-server
+version: emeland.io/v1
+kind: Metric
+spec:
+  metricId: 11111111-1111-1111-1111-111111111111
+  displayName: Resource count
+  description: Number of emeland resources, per namespace/job
+  annotations:
+    # The Prometheus time series to fan out (required).
+    emeland.io/metric.source: emeland_resource_count
+    # Aggregation reducing each group to a scalar: sum | avg | min | max | count.
+    # Defaults to sum when omitted.
+    emeland.io/metric.aggregation: sum
+    # Labels to group by (comma-separated). Defaults to "namespace,job".
+    # Note: emeland_resource_count also carries a `type` label; add it here
+    # (namespace,job,type) if you want a separate instance per resource type
+    # rather than a single sum across all types.
+    emeland.io/metric.group-by: namespace,job
+    emeland.io/unit: resources
+    emeland.io/dimension: inventory

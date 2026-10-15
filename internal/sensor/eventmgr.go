@@ -198,6 +198,19 @@ func (r *recordingSink) Receive(resType events.ResourceType, op events.Operation
 	r.mgr.mu.Lock()
 	_ = r.mgr.master.Receive(resType, op, resourceId, objects...)
 	r.mgr.sequence++
+
+	// Resource types the sensor consumes as input must not be forwarded to
+	// subscribers. A Metric is authored upstream and pushed in; the sensor fans
+	// it out into MetricInstance/MetricValue resources. When the upstream is
+	// also a subscriber (see config/sensor.yaml), echoing the Metric back out
+	// forms a feedback loop. Record it locally, but do not forward.
+	if !forwardableToSubscribers(resType) {
+		r.mgr.mu.Unlock()
+		r.mgr.log.Infow("event recorded (not forwarded)",
+			"kind", resType.String(), "operation", op.WireOperation(), "id", resourceId.String())
+		return nil
+	}
+
 	n := len(r.mgr.subscribers)
 	subs := make([]events.Subscriber, n)
 	copy(subs, r.mgr.subscribers)
@@ -224,6 +237,15 @@ func (r *recordingSink) Receive(resType events.ResourceType, op events.Operation
 		)
 	}
 	return nil
+}
+
+// forwardableToSubscribers reports whether an event of the given resource type
+// should be propagated to downstream subscribers. The sensor consumes Metric
+// resources as input and is the author of the derived MetricInstance/MetricValue
+// resources; forwarding Metric back out would loop when the upstream is also a
+// subscriber, so Metric is not forwarded.
+func forwardableToSubscribers(resType events.ResourceType) bool {
+	return resType != events.MetricResource
 }
 
 type subscriber struct {

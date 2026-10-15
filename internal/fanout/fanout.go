@@ -130,14 +130,34 @@ func New(source Source, querier Querier, emitter Emitter, log *zap.SugaredLogger
 }
 
 // EvaluateOnce fans out every eligible Metric a single time. Individual Metric
-// failures are logged so one bad Metric does not stop the rest.
+// failures are logged so one bad Metric does not stop the rest. Metrics that
+// have disappeared entirely from the source since a previous poll have all of
+// their derived MetricInstances/MetricValues reconciled away.
 func (e *Evaluator) EvaluateOnce(ctx context.Context) error {
 	metrics, err := e.source.GetMetrics()
 	if err != nil {
 		return fmt.Errorf("list metrics: %w", err)
 	}
+	visited := make(map[uuid.UUID]struct{}, len(metrics))
 	for _, m := range metrics {
 		e.evaluateMetric(ctx, m)
+		visited[m.GetMetricId()] = struct{}{}
+	}
+
+	// Metrics that vanished from the source are no longer visited by the loop
+	// above, so evaluateMetric never reconciles their groups. Walk the tracked
+	// set and delete everything still derived from a now-absent Metric. If some
+	// deletes fail, keep the entry so cleanup is retried next poll.
+	for metricID := range e.instances {
+		if _, ok := visited[metricID]; ok {
+			continue
+		}
+		failed := e.reconcile(metricID, nil)
+		if len(failed) == 0 {
+			delete(e.instances, metricID)
+		} else {
+			e.instances[metricID] = failed
+		}
 	}
 	return nil
 }
@@ -185,7 +205,12 @@ func (e *Evaluator) evaluateMetric(ctx context.Context, m mdlobs.Metric) {
 		}
 	}
 
-	e.reconcile(metricID, seen)
+	// Reconcile away groups that disappeared. Instances whose delete failed are
+	// kept in the tracked set so the next poll retries them rather than leaking.
+	failed := e.reconcile(metricID, seen)
+	for instanceID := range failed {
+		seen[instanceID] = struct{}{}
+	}
 	e.instances[metricID] = seen
 }
 
@@ -252,8 +277,12 @@ func (e *Evaluator) upsertGroup(m mdlobs.Metric, agg, source string, groupBy []s
 }
 
 // reconcile deletes MetricInstances (and their MetricValues) that were derived
-// from a Metric on a previous poll but are absent from this poll's groups.
-func (e *Evaluator) reconcile(metricID uuid.UUID, seen map[uuid.UUID]struct{}) {
+// from a Metric on a previous poll but are absent from this poll's groups
+// (anything in e.instances[metricID] but not in seen). It returns the set of
+// instance ids whose delete did not fully succeed, so the caller can keep them
+// in the tracked set and retry on the next poll instead of leaking them.
+func (e *Evaluator) reconcile(metricID uuid.UUID, seen map[uuid.UUID]struct{}) map[uuid.UUID]struct{} {
+	failed := make(map[uuid.UUID]struct{})
 	prev := e.instances[metricID]
 	for instanceID := range prev {
 		if _, ok := seen[instanceID]; ok {
@@ -269,6 +298,7 @@ func (e *Evaluator) reconcile(metricID uuid.UUID, seen map[uuid.UUID]struct{}) {
 		}); err != nil {
 			e.log.Errorw("emit metric value delete failed",
 				"metricValueId", valueID, "error", err)
+			failed[instanceID] = struct{}{}
 			continue
 		}
 		delete(e.seenValues, valueID)
@@ -280,12 +310,14 @@ func (e *Evaluator) reconcile(metricID uuid.UUID, seen map[uuid.UUID]struct{}) {
 		}); err != nil {
 			e.log.Errorw("emit metric instance delete failed",
 				"metricInstanceId", instanceID, "error", err)
+			failed[instanceID] = struct{}{}
 			continue
 		}
 		delete(e.seenInstanceSig, instanceID)
 		e.log.Infow("reconciled away disappeared group",
 			"metricId", metricID, "metricInstanceId", instanceID)
 	}
+	return failed
 }
 
 // buildMetricInstance constructs a derived MetricInstance for one group.
@@ -346,12 +378,21 @@ func buildAggregateQuery(agg string, groupBy []string, source string) string {
 // The selector is built from the group-by labels only (in declared order), so
 // the `by (<group-by>)` clause and the `{<matchers>}` are drawn from the same
 // set and cannot drift if a result ever carries extra labels.
+//
+// Every group-by label is pinned, including ones that are absent from the
+// sample. When `sum by (namespace, job) (x)` returns a group that has no `job`
+// label (because the underlying series lacked it), that group represents the
+// "job is absent" bucket. PromQL's `job=""` matches series where the label is
+// not present, so pinning the missing label to the empty string reproduces
+// exactly that group. Dropping the matcher instead (the previous behaviour)
+// produced a selector that also matched series which *do* carry the label, so
+// the stored expression and the reported value disagreed.
 func buildGroupQuery(agg string, groupBy []string, source string, labels map[string]string) string {
 	matchers := make([]string, 0, len(groupBy))
 	for _, k := range groupBy {
-		if v, ok := labels[k]; ok {
-			matchers = append(matchers, fmt.Sprintf("%s=%q", k, v))
-		}
+		// labels[k] is "" for a missing key, which is exactly the matcher we
+		// want (job="" matches series where job is absent).
+		matchers = append(matchers, fmt.Sprintf("%s=%q", k, labels[k]))
 	}
 	selector := source
 	if len(matchers) > 0 {

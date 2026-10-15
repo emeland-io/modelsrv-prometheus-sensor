@@ -2,6 +2,7 @@ package fanout
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -55,6 +56,23 @@ func (r *recordingEmitter) Emit(ev events.Event) error {
 	return nil
 }
 
+// failingDeleteEmitter records events but returns an error for Delete
+// operations while failDeletes is set, to exercise the retry path.
+type failingDeleteEmitter struct {
+	events      []events.Event
+	failDeletes bool
+}
+
+func (f *failingDeleteEmitter) Emit(ev events.Event) error {
+	if f.failDeletes && ev.Operation == events.DeleteOperation {
+		return errFakeDelete
+	}
+	f.events = append(f.events, ev)
+	return nil
+}
+
+var errFakeDelete = fmt.Errorf("fake delete failure")
+
 func newMetric(id uuid.UUID, ann map[string]string) mdlobs.Metric {
 	m := mdlobs.NewMetric(id)
 	m.SetDisplayName("Resource count")
@@ -76,9 +94,15 @@ var _ = Describe("query building", func() {
 		Expect(got).To(Equal(`avg by (namespace, service) (m{namespace="ns", service="svc"})`))
 	})
 
-	It("omits the selector braces when there are no labels", func() {
-		Expect(buildGroupQuery("sum", []string{"x"}, "m", map[string]string{})).
-			To(Equal("sum by (x) (m)"))
+	It("pins a missing group-by label to the empty string (matches absent)", func() {
+		// A series that lacks the "job" label produces a group keyed only on
+		// namespace. The stored expression must still scope to that exact group,
+		// so the missing label is pinned to "" (PromQL matches absent). The old
+		// behaviour dropped the matcher, letting the expression also match series
+		// that *do* carry job, disagreeing with the reported value.
+		got := buildGroupQuery("sum", []string{"namespace", "job"}, "m",
+			map[string]string{"namespace": "ns"})
+		Expect(got).To(Equal(`sum by (namespace, job) (m{namespace="ns", job=""})`))
 	})
 })
 
@@ -269,5 +293,77 @@ var _ = Describe("Evaluator.EvaluateOnce", func() {
 		Expect(em.events[1].ResourceType).To(Equal(events.MetricInstanceResource))
 		Expect(em.events[1].Operation).To(Equal(events.DeleteOperation))
 		Expect(em.events[1].ResourceId).To(Equal(gone))
+	})
+
+	It("reconciles away all groups of a Metric that disappears entirely", func() {
+		src := &fakeSource{metrics: []mdlobs.Metric{
+			newMetric(metricID, map[string]string{AnnotationSource: "m"}),
+		}}
+		q := &fakeQuerier{samples: []prometheus.Sample{
+			{Labels: map[string]string{"namespace": "ns", "service": "a"}, Value: "1"},
+			{Labels: map[string]string{"namespace": "ns", "service": "b"}, Value: "2"},
+		}}
+		ev, em := newEval(src, q)
+		Expect(ev.EvaluateOnce(ctx)).To(Succeed())
+
+		instA := instanceIDFor(metricID, map[string]string{"namespace": "ns", "service": "a"})
+		instB := instanceIDFor(metricID, map[string]string{"namespace": "ns", "service": "b"})
+
+		// The Metric is removed from the source entirely.
+		src.metrics = nil
+		em.events = nil
+		Expect(ev.EvaluateOnce(ctx)).To(Succeed())
+
+		// Both groups must be deleted (value+instance each => 4 events).
+		deletedInstances := map[uuid.UUID]bool{}
+		for _, e := range em.events {
+			Expect(e.Operation).To(Equal(events.DeleteOperation))
+			if e.ResourceType == events.MetricInstanceResource {
+				deletedInstances[e.ResourceId] = true
+			}
+		}
+		Expect(deletedInstances).To(HaveKey(instA))
+		Expect(deletedInstances).To(HaveKey(instB))
+		Expect(em.events).To(HaveLen(4))
+
+		// Nothing left tracked, so a further poll does nothing.
+		em.events = nil
+		Expect(ev.EvaluateOnce(ctx)).To(Succeed())
+		Expect(em.events).To(BeEmpty())
+	})
+
+	It("retries a failed delete on the next poll instead of forgetting it", func() {
+		src := &fakeSource{metrics: []mdlobs.Metric{
+			newMetric(metricID, map[string]string{AnnotationSource: "m"}),
+		}}
+		q := &fakeQuerier{samples: []prometheus.Sample{
+			{Labels: map[string]string{"namespace": "ns", "service": "a"}, Value: "1"},
+		}}
+		em := &failingDeleteEmitter{}
+		ev := New(src, q, em, zap.NewNop().Sugar())
+		Expect(ev.EvaluateOnce(ctx)).To(Succeed())
+
+		gone := instanceIDFor(metricID, map[string]string{"namespace": "ns", "service": "a"})
+
+		// Group disappears; deletes will fail this round.
+		q.samples = nil
+		em.failDeletes = true
+		em.events = nil
+		Expect(ev.EvaluateOnce(ctx)).To(Succeed())
+		// A delete was attempted but failed; the instance is still tracked.
+		Expect(ev.instances[metricID]).To(HaveKey(gone))
+
+		// Next poll: deletes succeed, so the retry cleans it up.
+		em.failDeletes = false
+		em.events = nil
+		Expect(ev.EvaluateOnce(ctx)).To(Succeed())
+		var deletedInstance bool
+		for _, e := range em.events {
+			if e.ResourceType == events.MetricInstanceResource && e.Operation == events.DeleteOperation && e.ResourceId == gone {
+				deletedInstance = true
+			}
+		}
+		Expect(deletedInstance).To(BeTrue())
+		Expect(ev.instances[metricID]).NotTo(HaveKey(gone))
 	})
 })
